@@ -1,31 +1,29 @@
 use rustpython_codegen::{compile, symboltable};
-use rustpython_parser::ast::{self as ast, fold::Fold, ConstantOptimizer};
-
-pub use rustpython_codegen::compile::CompileOpts;
-pub use rustpython_compiler_core::{bytecode::CodeObject, Mode};
-pub use rustpython_parser::{source_code::LinearLocator, Parse};
-
-// these modules are out of repository. re-exporting them here for convenience.
-pub use rustpython_codegen as codegen;
-pub use rustpython_compiler_core as core;
-pub use rustpython_parser as parser;
+use rustpython_parser::{
+    ast::{self as ast, fold::Fold, ConstantOptimizer, Expr, Suite},
+    source_code::LinearLocator,
+    Parse,
+};
+use rustpython_compiler_core::{bytecode::CodeObject, Mode};
+use std::error::Error;
+use std::fmt;
 
 #[derive(Debug)]
 pub enum CompileErrorType {
     Codegen(rustpython_codegen::error::CodegenErrorType),
-    Parse(parser::ParseErrorType),
+    Parse(rustpython_parser::ParseErrorType),
 }
 
-impl std::error::Error for CompileErrorType {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl Error for CompileErrorType {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             CompileErrorType::Codegen(e) => e.source(),
             CompileErrorType::Parse(e) => e.source(),
         }
     }
 }
-impl std::fmt::Display for CompileErrorType {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Display for CompileErrorType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             CompileErrorType::Codegen(e) => e.fmt(f),
             CompileErrorType::Parse(e) => e.fmt(f),
@@ -37,8 +35,8 @@ impl From<rustpython_codegen::error::CodegenErrorType> for CompileErrorType {
         CompileErrorType::Codegen(source)
     }
 }
-impl From<parser::ParseErrorType> for CompileErrorType {
-    fn from(source: parser::ParseErrorType) -> Self {
+impl From<rustpython_parser::ParseErrorType> for CompileErrorType {
+    fn from(source: rustpython_parser::ParseErrorType) -> Self {
         CompileErrorType::Parse(source)
     }
 }
@@ -49,21 +47,22 @@ pub type CompileError = rustpython_parser::source_code::LocatedError<CompileErro
 pub fn compile(
     source: &str,
     mode: Mode,
-    source_path: String,
+    source_path: &str,
     opts: CompileOpts,
 ) -> Result<CodeObject, CompileError> {
     let mut locator = LinearLocator::new(source);
-    let mut ast = match parser::parse(source, mode.into(), &source_path) {
+    let ast = match parser::parse(source, mode.into(), source_path) {
         Ok(x) => x,
         Err(e) => return Err(locator.locate_error(e)),
     };
-    if opts.optimize > 0 {
-        ast = ConstantOptimizer::new()
-            .fold_mod(ast)
-            .unwrap_or_else(|e| match e {});
-    }
-    let ast = locator.fold_mod(ast).unwrap_or_else(|e| match e {});
-    compile::compile_top(&ast, source_path, mode, opts).map_err(|e| e.into())
+    
+    let ast = if opts.optimize > 0 {
+        ConstantOptimizer::new().fold_mod(ast)?
+    } else {
+        ast
+    };
+    
+    compile::compile_top(&ast, source_path, mode, opts).map_err(Into::into)
 }
 
 pub fn compile_symtable(
@@ -74,15 +73,11 @@ pub fn compile_symtable(
     let mut locator = LinearLocator::new(source);
     let res = match mode {
         Mode::Exec | Mode::Single | Mode::BlockExpr => {
-            let ast =
-                ast::Suite::parse(source, source_path).map_err(|e| locator.locate_error(e))?;
-            let ast = locator.fold(ast).unwrap();
+            let ast = Suite::parse(source, source_path).map_err(|e| locator.locate_error(e))?;
             symboltable::SymbolTable::scan_program(&ast)
         }
         Mode::Eval => {
-            let expr =
-                ast::Expr::parse(source, source_path).map_err(|e| locator.locate_error(e))?;
-            let expr = locator.fold(expr).unwrap();
+            let expr = Expr::parse(source, source_path).map_err(|e| locator.locate_error(e))?;
             symboltable::SymbolTable::scan_expr(&expr)
         }
     };
