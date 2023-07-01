@@ -12,10 +12,13 @@ impl InterpreterConfig {
     pub fn new() -> Self {
         Self::default()
     }
+    
     pub fn interpreter(self) -> Interpreter {
         let settings = self.settings.unwrap_or_default();
-        Interpreter::with_init(settings, |vm| {
-            for hook in self.init_hooks {
+        let init_hooks = self.init_hooks;
+        
+        Interpreter::with_init(settings, move |vm| {
+            for hook in init_hooks {
                 hook(vm);
             }
         })
@@ -25,10 +28,12 @@ impl InterpreterConfig {
         self.settings = Some(settings);
         self
     }
+    
     pub fn init_hook(mut self, hook: InitHook) -> Self {
         self.init_hooks.push(hook);
         self
     }
+    
     #[cfg(feature = "stdlib")]
     pub fn init_stdlib(self) -> Self {
         self.init_hook(Box::new(init_stdlib))
@@ -51,7 +56,7 @@ pub fn init_stdlib(vm: &mut VirtualMachine) {
         let settings = &mut state.settings;
 
         #[allow(clippy::needless_collect)] // false positive
-        let path_list: Vec<_> = settings.path_list.drain(..).collect();
+        let path_list: Vec<_> = std::mem::take(&mut settings.path_list);
 
         // BUILDTIME_RUSTPYTHONPATH should be set when distributing
         if let Some(paths) = option_env!("BUILDTIME_RUSTPYTHONPATH") {
@@ -61,9 +66,7 @@ pub fn init_stdlib(vm: &mut VirtualMachine) {
             )
         } else {
             #[cfg(feature = "rustpython-pylib")]
-            settings
-                .path_list
-                .push(rustpython_pylib::LIB_PATH.to_owned())
+            settings.path_list.push(rustpython_pylib::LIB_PATH.to_owned())
         }
 
         settings.path_list.extend(path_list.into_iter());
